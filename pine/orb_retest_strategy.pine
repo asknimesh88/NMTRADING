@@ -1,0 +1,479 @@
+//@version=6
+// ORB Breakout-Retest strategy (New York open)
+// Opening range -> breakout must CLOSE beyond the range on a structure timeframe ->
+// wait for a retest of the broken level (optionally inside an FVG that overlaps it) ->
+// enter on a 1-minute confirmation candle. Optional failed-breakout fades.
+// Run on a 1-minute chart.
+strategy("ORB Breakout-Retest (NY Open)", shorttitle = "ORB Retest", overlay = true,
+     pyramiding = 0, initial_capital = 10000, currency = currency.USD,
+     default_qty_type = strategy.fixed, default_qty_value = 1,
+     commission_type = strategy.commission.cash_per_contract, commission_value = 0,
+     slippage = 1, max_boxes_count = 300, max_labels_count = 500)
+
+// ───────────────────────── Inputs ─────────────────────────
+G_SES = "Session (New York time)"
+tz        = input.string("America/New_York", "Timezone", group = G_SES)
+orbStartH = input.int(9, "Opening range starts at", minval = 0, maxval = 23, group = G_SES, inline = "orb")
+orbStartM = input.int(30, ":", minval = 0, maxval = 59, group = G_SES, inline = "orb")
+orbLen    = input.int(15, "Opening range length (minutes)", options = [5, 15, 30, 60], group = G_SES)
+entEndH   = input.int(11, "No new entries after", minval = 0, maxval = 23, group = G_SES, inline = "ent")
+entEndM   = input.int(30, ":", minval = 0, maxval = 59, group = G_SES, inline = "ent")
+flatH     = input.int(12, "Close all positions at", minval = 0, maxval = 23, group = G_SES, inline = "flat")
+flatM     = input.int(0, ":", minval = 0, maxval = 59, group = G_SES, inline = "flat")
+
+G_ENT = "Entry"
+entryMode  = input.string("Retest", "Entry mode", options = ["Breakout close", "Retest", "Retest + new high/low"], group = G_ENT,
+     tooltip = "Breakout close: enter as soon as the structure candle closes beyond the range.\nRetest: wait for price to come back to the broken level and a 1m candle to close back on the breakout side.\nRetest + new high/low: after the retest, wait for price to close beyond the breakout swing.")
+structTF   = input.timeframe("5", "Structure timeframe", group = G_ENT,
+     tooltip = "The breakout must CLOSE beyond the ORB on this timeframe (wicks don't count). FVGs are read from this timeframe too. Use 5 (or 15), and keep it no larger than the opening range length.")
+touchPct   = input.float(10.0, "Retest zone (% of range)", minval = 0, step = 5, group = G_ENT,
+     tooltip = "How close price must come back to the ORB level to count as a retest.")
+invPct     = input.float(25.0, "Setup fails on a close this far back inside (% of range)", minval = 0, step = 5, group = G_ENT)
+dirClose   = input.bool(true, "Confirmation candle must close in trade direction", group = G_ENT)
+maxTrades  = input.int(1, "Max trades per direction per day", minval = 1, group = G_ENT)
+allowLong  = input.bool(true, "Longs", group = G_ENT, inline = "dir")
+allowShort = input.bool(true, "Shorts", group = G_ENT, inline = "dir")
+useFade    = input.bool(false, "Also trade failed breakouts (fade back into the range)", group = G_ENT)
+fadeTF     = input.timeframe("15", "Failed-breakout candle timeframe", group = G_ENT,
+     tooltip = "A candle on this timeframe that wicks beyond the ORB but closes back inside arms a fade at that ORB level.")
+
+G_FIL = "Confluence filters"
+skipWknd  = input.bool(true, "Skip weekends (Sat/Sun, New York time)", group = G_FIL)
+useMinR   = input.bool(true, "Minimum opening-range size", group = G_FIL, inline = "mr")
+minRPct   = input.float(0.20, "% of price", minval = 0, step = 0.05, group = G_FIL, inline = "mr",
+     tooltip = "Skip the day if the opening range (high - low) is smaller than this % of price. Tiny ranges give stops and targets too small to beat fees and noise. Example: ETH at 2,500 with 0.20% needs a range of at least 5 points.")
+useStrong = input.bool(true, "Breakout must be strong", group = G_FIL)
+bkDistPct = input.float(10.0, "Close beyond the level by (% of range)", minval = 0, step = 5, group = G_FIL)
+bodyPct   = input.float(60.0, "Breakout candle body (% of candle)", minval = 0, maxval = 100, step = 5, group = G_FIL,
+     tooltip = "Body = |close - open|. 60 means a solid candle with small wicks, i.e. real momentum.")
+useFvg    = input.bool(true, "Require an FVG overlapping the ORB level", group = G_FIL)
+fvgTolPct = input.float(25.0, "FVG overlap tolerance (% of range)", minval = 0, step = 5, group = G_FIL)
+useVwap   = input.bool(true, "VWAP bias: longs above, shorts below", group = G_FIL)
+usePdhl   = input.bool(true, "Skip if the target runs through previous day high/low", group = G_FIL)
+useRange  = input.bool(false, "Opening-range size filter (range / daily ATR)", group = G_FIL)
+rangeMin  = input.float(0.10, "Min", step = 0.05, group = G_FIL, inline = "rg")
+rangeMax  = input.float(0.60, "Max", step = 0.05, group = G_FIL, inline = "rg")
+
+G_RSK = "Stop, target & size"
+slMode   = input.string("Retest swing", "Stop-loss method", options = ["Retest swing", "FVG far edge", "Range fraction", "Full range", "ATR"], group = G_RSK,
+     tooltip = "Retest swing: beyond the extreme made during the retest.\nFVG far edge: beyond the far side of the FVG.\nRange fraction: a % of the range past the ORB level.\nFull range: one full range past the level (opposite side for breakouts).\nATR: entry +/- ATR multiple.")
+slBufPct = input.float(5.0, "Stop buffer (% of range)", minval = 0, step = 1, group = G_RSK)
+slFrac   = input.float(50.0, "Range-fraction stop (% of range past the level)", minval = 1, step = 5, group = G_RSK)
+atrLen   = input.int(14, "ATR length", minval = 1, group = G_RSK, inline = "atr")
+atrMult  = input.float(1.5, "x ATR", step = 0.1, group = G_RSK, inline = "atr")
+minSlPct = input.float(10.0, "Minimum stop distance (% of range)", minval = 0, step = 5, group = G_RSK)
+minSlAtr = input.float(1.0, "Minimum stop distance (x ATR)", minval = 0, step = 0.25, group = G_RSK,
+     tooltip = "The stop is never closer than this many 1-minute ATRs (ATR length above). Stops normal candle noise from hitting you. 0 = off.")
+rr       = input.float(2.0, "Reward : risk", minval = 0.5, step = 0.25, group = G_RSK)
+usePart  = input.bool(true, "Close 50% at 1R and move stop to breakeven", group = G_RSK,
+     tooltip = "Needs a position size of at least 2 units/contracts to split.")
+sizing   = input.string("Fixed quantity", "Position size", options = ["Fixed quantity", "Risk % of equity"], group = G_RSK)
+fixQty   = input.float(1.0, "Fixed quantity", minval = 0, group = G_RSK)
+riskPct  = input.float(0.5, "Risk % of equity", minval = 0.01, step = 0.1, group = G_RSK)
+wholeQty = input.bool(true, "Round size down to whole units (futures/stocks)", group = G_RSK)
+
+G_DSP = "Display"
+showLv  = input.bool(true, "Show previous day high/low", group = G_DSP)
+showVw  = input.bool(true, "Show VWAP", group = G_DSP)
+showFvg = input.bool(true, "Show qualifying FVGs", group = G_DSP)
+orbCol   = input.color(color.teal, "ORB high / low colour", group = G_DSP)
+pdCol    = input.color(color.new(color.orange, 30), "PDH / PDL colour", group = G_DSP)
+buyCol   = input.color(color.new(color.green, 0), "BUY label colour", group = G_DSP, inline = "bs")
+sellCol  = input.color(color.new(color.red, 0), "SELL label colour", group = G_DSP, inline = "bs")
+vwCol    = input.color(color.new(color.purple, 20), "VWAP colour", group = G_DSP)
+bullCol  = input.color(color.green, "Bullish FVG colour", group = G_DSP, inline = "fvgc")
+bearCol  = input.color(color.red, "Bearish FVG colour", group = G_DSP, inline = "fvgc")
+lblSizeS = input.string("small", "Label size", options = ["tiny", "small", "normal"], group = G_DSP)
+lblSize  = switch lblSizeS
+    "tiny"   => size.tiny
+    "normal" => size.normal
+    => size.small
+
+if barstate.isfirst
+    if timeframe.in_seconds() > orbLen * 60
+        runtime.error("Chart timeframe must not be larger than the opening range. Use a 1-minute chart.")
+    if timeframe.in_seconds(structTF) < timeframe.in_seconds()
+        runtime.error("Structure timeframe must be equal to or higher than the chart timeframe.")
+
+// ───────────────────────── Time ─────────────────────────
+nowM        = hour(time, tz) * 60 + minute(time, tz)
+orbStartMin = orbStartH * 60 + orbStartM
+orbEndMin   = orbStartMin + orbLen
+entEndMin   = entEndH * 60 + entEndM
+flatMin     = flatH * 60 + flatM
+dayKey      = dayofmonth(time, tz)
+inOrb       = nowM >= orbStartMin and nowM < orbEndMin
+orbFirstBar = inOrb and (not inOrb[1] or dayKey != dayKey[1])
+inEntryWin  = nowM >= orbEndMin and nowM < entEndMin
+
+// ───────────────────────── Higher-timeframe data (confirmed bars only, no repaint) ─────────────────────────
+// [1] = last CLOSED bar (candle 3 of an FVG), [3] = candle 1
+[sO, sH, sL, sC, sH2, sL2, sT] = request.security(syminfo.tickerid, structTF, [open[1], high[1], low[1], close[1], high[3], low[3], time[1]], lookahead = barmerge.lookahead_on)
+newStruct = sT != sT[1]
+[fH, fL, fC, fT] = request.security(syminfo.tickerid, fadeTF, [high[1], low[1], close[1], time[1]], lookahead = barmerge.lookahead_on)
+newFade = fT != fT[1]
+[pdh, pdl, dAtr] = request.security(syminfo.tickerid, "D", [high[1], low[1], ta.atr(14)[1]], lookahead = barmerge.lookahead_on)
+vw   = ta.vwap(hlc3)
+atrC = ta.atr(atrLen)
+
+// ───────────────────────── State ─────────────────────────
+var float orbH = na
+var float orbL = na
+var bool  orbReady = false
+var bool  rangeOk  = true
+var int   orbEndT  = na
+var int   longCount  = 0
+var int   shortCount = 0
+
+// Breakout up -> long at ORB high          (state: 0 waiting, 1 armed, 2 finished)
+var int   bkUpSt    = 0
+var bool  bkUpRet   = false
+var float bkUpSwing = na
+var float bkUpExt   = na
+var float bkUpFvgT  = na
+var float bkUpFvgB  = na
+// Breakout down -> short at ORB low
+var int   bkDnSt    = 0
+var bool  bkDnRet   = false
+var float bkDnSwing = na
+var float bkDnExt   = na
+var float bkDnFvgT  = na
+var float bkDnFvgB  = na
+// Failed break up -> short at ORB high
+var int   fuSt    = 0
+var bool  fuRet   = false
+var float fuSwing = na
+var float fuSweep = na
+var float fuFvgT  = na
+var float fuFvgB  = na
+// Failed break down -> long at ORB low
+var int   fdSt    = 0
+var bool  fdRet   = false
+var float fdSwing = na
+var float fdSweep = na
+var float fdFvgT  = na
+var float fdFvgB  = na
+
+// ───────────────────────── Build the opening range ─────────────────────────
+if orbFirstBar
+    orbH := high
+    orbL := low
+    orbReady := false
+    longCount := 0
+    shortCount := 0
+    bkUpSt := 0
+    bkUpRet := false
+    bkUpSwing := na
+    bkUpExt := na
+    bkUpFvgT := na
+    bkUpFvgB := na
+    bkDnSt := 0
+    bkDnRet := false
+    bkDnSwing := na
+    bkDnExt := na
+    bkDnFvgT := na
+    bkDnFvgB := na
+    fuSt := 0
+    fuRet := false
+    fuSwing := na
+    fuSweep := na
+    fuFvgT := na
+    fuFvgB := na
+    fdSt := 0
+    fdRet := false
+    fdSwing := na
+    fdSweep := na
+    fdFvgT := na
+    fdFvgB := na
+else if inOrb
+    orbH := math.max(orbH, high)
+    orbL := math.min(orbL, low)
+
+if not inOrb and inOrb[1] and not orbReady and not na(orbH)
+    orbReady := true
+    orbEndT  := time
+    float r0 = orbH - orbL
+    int dow  = dayofweek(time, tz)
+    bool wk  = dow == dayofweek.saturday or dow == dayofweek.sunday
+    rangeOk  := (not useRange or (dAtr > 0 and r0 / dAtr >= rangeMin and r0 / dAtr <= rangeMax))
+         and (not useMinR or r0 / close * 100 >= minRPct)
+         and not (skipWknd and wk)
+
+// Time exit
+if nowM >= flatMin
+    orbReady := false
+    if strategy.position_size != 0
+        strategy.close_all(comment = "Time exit")
+
+rng    = orbH - orbL
+tol    = rng * fvgTolPct / 100
+touch  = rng * touchPct / 100
+inv    = rng * invPct / 100
+active = orbReady and inEntryWin and rangeOk
+fvgW   = timeframe.in_seconds(structTF) * 1000 * 6
+
+f_fvgBox(float top, float bot, color c) =>
+    box.new(left = sT, top = top, right = sT + fvgW, bottom = bot, xloc = xloc.bar_time,
+         border_color = color.new(c, 60), bgcolor = color.new(c, 85),
+         text = "FVG", text_size = lblSize, text_color = c,
+         text_halign = text.align_right, text_valign = text.align_center)
+
+// ───────────────────────── Failed-breakout detection ─────────────────────────
+if useFade and active and newFade and fT >= orbEndT
+    if allowShort and fuSt == 0 and fH > orbH and fC < orbH and fC > orbL
+        fuSt := 1
+        fuSweep := fH
+    if allowLong and fdSt == 0 and fL < orbL and fC > orbL and fC < orbH
+        fdSt := 1
+        fdSweep := fL
+
+// ───────────────────────── Breakouts + FVGs on the structure timeframe ─────────────────────────
+bool bkUpNow = false
+bool bkDnNow = false
+if active and newStruct and sT >= orbEndT
+    float bkDist = useStrong ? rng * bkDistPct / 100 : 0.0
+    bool  bodyOk = not useStrong or (sH > sL and math.abs(sC - sO) >= (sH - sL) * bodyPct / 100)
+    if allowLong and bkUpSt == 0 and sC > orbH + bkDist and sC > sO and bodyOk
+        bkUpSt := 1
+        bkUpNow := true
+        bkUpSwing := sL
+        bkUpExt := sH
+    if allowShort and bkDnSt == 0 and sC < orbL - bkDist and sC < sO and bodyOk
+        bkDnSt := 1
+        bkDnNow := true
+        bkDnSwing := sH
+        bkDnExt := sL
+    // Bullish FVG: candle-1 high < candle-3 low, zone [sH2, sL]
+    if sL > sH2
+        if bkUpSt == 1 and sH2 <= orbH + tol and sL >= orbH - tol
+            bkUpFvgB := sH2
+            bkUpFvgT := sL
+            if showFvg
+                f_fvgBox(sL, sH2, bullCol)
+        if fdSt == 1 and sH2 <= orbL + tol and sL >= orbL - tol
+            fdFvgB := sH2
+            fdFvgT := sL
+            if showFvg
+                f_fvgBox(sL, sH2, bullCol)
+    // Bearish FVG: candle-1 low > candle-3 high, zone [sH, sL2]
+    if sH < sL2
+        if bkDnSt == 1 and sH <= orbL + tol and sL2 >= orbL - tol
+            bkDnFvgB := sH
+            bkDnFvgT := sL2
+            if showFvg
+                f_fvgBox(sL2, sH, bearCol)
+        if fuSt == 1 and sH <= orbH + tol and sL2 >= orbH - tol
+            fuFvgB := sH
+            fuFvgT := sL2
+            if showFvg
+                f_fvgBox(sL2, sH, bearCol)
+
+// ───────────────────────── 1-minute retest / confirmation ─────────────────────────
+int    goDir    = 0
+float  goSwing  = na
+float  goFvgFar = na
+float  goLevel  = na
+string goTag    = ""
+int    goSetup  = 0
+
+// Long: breakout above ORB high
+if active and bkUpSt == 1
+    if entryMode == "Breakout close"
+        if bkUpNow and goDir == 0
+            goDir := 1
+            goSwing := bkUpSwing
+            goFvgFar := bkUpFvgB
+            goLevel := orbH
+            goTag := "ORB break long"
+            goSetup := 1
+    else
+        float invLvl = (useFvg and not na(bkUpFvgB) ? math.min(bkUpFvgB, orbH) : orbH) - inv
+        if close < invLvl
+            bkUpSt := 2
+        else
+            bool fvgOk = not useFvg or not na(bkUpFvgT)
+            if not bkUpRet
+                bkUpExt := math.max(bkUpExt, high)
+                float zone = useFvg and not na(bkUpFvgT) ? math.max(bkUpFvgT, orbH + touch) : orbH + touch
+                if fvgOk and low <= zone
+                    bkUpRet := true
+                    bkUpSwing := low
+            else
+                bkUpSwing := math.min(bkUpSwing, low)
+            if bkUpRet
+                bool ok = entryMode == "Retest" ? close > orbH and (not dirClose or close > open) : close > bkUpExt
+                if ok and goDir == 0
+                    goDir := 1
+                    goSwing := bkUpSwing
+                    goFvgFar := bkUpFvgB
+                    goLevel := orbH
+                    goTag := "ORB retest long"
+                    goSetup := 1
+
+// Short: breakout below ORB low
+if active and bkDnSt == 1
+    if entryMode == "Breakout close"
+        if bkDnNow and goDir == 0
+            goDir := -1
+            goSwing := bkDnSwing
+            goFvgFar := bkDnFvgT
+            goLevel := orbL
+            goTag := "ORB break short"
+            goSetup := 2
+    else
+        float invLvl = (useFvg and not na(bkDnFvgT) ? math.max(bkDnFvgT, orbL) : orbL) + inv
+        if close > invLvl
+            bkDnSt := 2
+        else
+            bool fvgOk = not useFvg or not na(bkDnFvgB)
+            if not bkDnRet
+                bkDnExt := math.min(bkDnExt, low)
+                float zone = useFvg and not na(bkDnFvgB) ? math.min(bkDnFvgB, orbL - touch) : orbL - touch
+                if fvgOk and high >= zone
+                    bkDnRet := true
+                    bkDnSwing := high
+            else
+                bkDnSwing := math.max(bkDnSwing, high)
+            if bkDnRet
+                bool ok = entryMode == "Retest" ? close < orbL and (not dirClose or close < open) : close < bkDnExt
+                if ok and goDir == 0
+                    goDir := -1
+                    goSwing := bkDnSwing
+                    goFvgFar := bkDnFvgT
+                    goLevel := orbL
+                    goTag := "ORB retest short"
+                    goSetup := 2
+
+// Fade short: failed break above ORB high, ORB high now resistance
+if active and fuSt == 1
+    if close > fuSweep
+        fuSt := 2
+    else
+        bool fvgOk = not useFvg or not na(fuFvgB)
+        if not fuRet
+            float zone = useFvg and not na(fuFvgB) ? math.min(fuFvgB, orbH - touch) : orbH - touch
+            if fvgOk and high >= zone
+                fuRet := true
+                fuSwing := high
+        else
+            fuSwing := math.max(fuSwing, high)
+        if fuRet and close < orbH and (not dirClose or close < open) and goDir == 0
+            goDir := -1
+            goSwing := fuSwing
+            goFvgFar := fuFvgT
+            goLevel := orbH
+            goTag := "Failed break short"
+            goSetup := 3
+
+// Fade long: failed break below ORB low, ORB low now support
+if active and fdSt == 1
+    if close < fdSweep
+        fdSt := 2
+    else
+        bool fvgOk = not useFvg or not na(fdFvgT)
+        if not fdRet
+            float zone = useFvg and not na(fdFvgT) ? math.max(fdFvgT, orbL + touch) : orbL + touch
+            if fvgOk and low <= zone
+                fdRet := true
+                fdSwing := low
+        else
+            fdSwing := math.min(fdSwing, low)
+        if fdRet and close > orbL and (not dirClose or close > open) and goDir == 0
+            goDir := 1
+            goSwing := fdSwing
+            goFvgFar := fdFvgB
+            goLevel := orbL
+            goTag := "Failed break long"
+            goSetup := 4
+
+// ───────────────────────── Stop / size helpers ─────────────────────────
+f_stop(int dir, float entry, float level, float swing, float fvgFar) =>
+    float r = orbH - orbL
+    float base = switch slMode
+        "Retest swing"   => swing
+        "FVG far edge"   => na(fvgFar) ? swing : fvgFar
+        "Range fraction" => level - dir * r * slFrac / 100
+        "Full range"     => level - dir * r
+        => entry - dir * atrC * atrMult
+    float sl = base - dir * r * slBufPct / 100
+    float minD = math.max(r * minSlPct / 100, atrC * minSlAtr)
+    dir == 1 ? math.min(sl, entry - minD) : math.max(sl, entry + minD)
+
+f_qty(float entry, float sl) =>
+    float q = fixQty
+    if sizing == "Risk % of equity"
+        float perUnit = math.abs(entry - sl) * syminfo.pointvalue
+        q := perUnit > 0 ? strategy.equity * riskPct / 100 / perUnit : 0.0
+    wholeQty ? math.floor(q) : q
+
+// ───────────────────────── Orders ─────────────────────────
+var int   tradeDir = 0
+var float tradeTP  = na
+var float tradeQty = 0.0
+var bool  beDone   = true
+
+if goDir != 0 and strategy.position_size == 0
+    // one shot per setup, whether or not the filters pass
+    switch goSetup
+        1 => bkUpSt := 2
+        2 => bkDnSt := 2
+        3 => fuSt := 2
+        4 => fdSt := 2
+    float entry = close
+    float sl    = f_stop(goDir, entry, goLevel, goSwing, goFvgFar)
+    float risk  = math.abs(entry - sl)
+    float tp    = entry + goDir * risk * rr
+    float tp1   = entry + goDir * risk
+    float qty   = f_qty(entry, sl)
+    bool countOk = goDir == 1 ? longCount < maxTrades : shortCount < maxTrades
+    bool vwapOk  = not useVwap or (goDir == 1 ? close > vw : close < vw)
+    bool pdOk    = not usePdhl or (goDir == 1 ? (na(pdh) or not (entry < pdh and tp > pdh)) : (na(pdl) or not (entry > pdl and tp < pdl)))
+    if countOk and vwapOk and pdOk and qty > 0 and risk > 0
+        string id = goDir == 1 ? "Long" : "Short"
+        strategy.entry(id, goDir == 1 ? strategy.long : strategy.short, qty = qty, comment = goTag)
+        if usePart
+            strategy.exit("TP1", id, qty_percent = 50, stop = sl, limit = tp1, comment_profit = "TP1", comment_loss = "SL")
+            strategy.exit("TP2", id, stop = sl, limit = tp, comment_profit = "TP2", comment_loss = "SL")
+        else
+            strategy.exit("Exit", id, stop = sl, limit = tp, comment_profit = "TP", comment_loss = "SL")
+        label.new(bar_index, goDir == 1 ? low : high,
+             (goDir == 1 ? "BUY" : "SELL") + "\nEntry " + str.tostring(entry, format.mintick) + "\nSL " + str.tostring(sl, format.mintick) + "\nTP " + str.tostring(tp, format.mintick),
+             style = goDir == 1 ? label.style_label_up : label.style_label_down,
+             color = goDir == 1 ? buyCol : sellCol, textcolor = color.white, size = lblSize, tooltip = goTag)
+        tradeDir := goDir
+        tradeTP  := tp
+        tradeQty := qty
+        beDone   := false
+        if goDir == 1
+            longCount += 1
+        else
+            shortCount += 1
+        alert(str.format("{0} {1} ({2}) | entry ~{3} | SL {4} | TP {5}", syminfo.ticker, id, goTag,
+             str.tostring(entry, format.mintick), str.tostring(sl, format.mintick), str.tostring(tp, format.mintick)),
+             alert.freq_once_per_bar_close)
+
+// Move the runner's stop to breakeven once TP1 has filled
+if usePart and not beDone and strategy.position_size != 0 and math.abs(strategy.position_size) < tradeQty
+    strategy.exit("TP2", tradeDir == 1 ? "Long" : "Short", stop = strategy.position_avg_price, limit = tradeTP, comment_profit = "TP2", comment_loss = "BE")
+    beDone := true
+
+// ───────────────────────── Plots ─────────────────────────
+showOrb = orbReady or inOrb
+pH = plot(showOrb ? orbH : na, "ORB high", orbCol, 2, plot.style_linebr)
+pL = plot(showOrb ? orbL : na, "ORB low", orbCol, 2, plot.style_linebr)
+fill(pH, pL, color = color.new(orbCol, 90), title = "ORB fill")
+bgcolor(inOrb ? color.new(orbCol, 93) : na, title = "Opening range window")
+plot(showLv ? pdh : na, "Previous day high", pdCol, 1, plot.style_stepline)
+plot(showLv ? pdl : na, "Previous day low", pdCol, 1, plot.style_stepline)
+
+// End-of-line labels (moved to the latest bar on every update)
+var label pdhLbl = label.new(bar_index, close, "PDH", style = label.style_label_left, color = color(na), textcolor = pdCol, size = lblSize)
+var label pdlLbl = label.new(bar_index, close, "PDL", style = label.style_label_left, color = color(na), textcolor = pdCol, size = lblSize)
+var label vwLbl  = label.new(bar_index, close, "VWAP", style = label.style_label_left, color = color(na), textcolor = vwCol, size = lblSize)
+label.set_xy(pdhLbl, bar_index, showLv ? pdh : na)
+label.set_xy(pdlLbl, bar_index, showLv ? pdl : na)
+label.set_xy(vwLbl, bar_index, showVw ? vw : na)
+
+plot(showVw ? vw : na, "VWAP", vwCol, 1)
+plotshape(bkUpNow, "Breakout up (not an entry)", shape.circle, location.belowbar, color.new(color.gray, 30), size = size.tiny)
+plotshape(bkDnNow, "Breakout down (not an entry)", shape.circle, location.abovebar, color.new(color.gray, 30), size = size.tiny)

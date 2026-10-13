@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ORB Paper Trades</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f4f2; --surface: #fcfcfb; --line: #e3e2de; --grid: #ecebe7;
+    --text: #0b0b0b; --text-2: #52514e; --muted: #807f79;
+    --series: #2a78d6; --pos: #2a78d6; --neg: #e34948;
+    --good: #0ca30c; --critical: #d03b3b; --warn: #b07800;
+    --accent-bg: #eaf2fc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #121211; --surface: #1a1a19; --line: #2e2e2b; --grid: #262624;
+      --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8e86;
+      --series: #3987e5; --pos: #3987e5; --neg: #e66767;
+      --good: #0ca30c; --critical: #d03b3b; --warn: #fab219; --accent-bg: #1c2a3d;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #121211; --surface: #1a1a19; --line: #2e2e2b; --grid: #262624;
+    --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8e86;
+    --series: #3987e5; --pos: #3987e5; --neg: #e66767;
+    --good: #0ca30c; --critical: #d03b3b; --warn: #fab219; --accent-bg: #1c2a3d;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; justify-content: space-between; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 14px; margin: 0 0 12px; color: var(--text-2); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .err { color: var(--critical); font-size: 12px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+  select, input, button { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+  button { cursor: pointer; }
+  button.primary { background: var(--series); border-color: var(--series); color: #fff; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .tile { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+  .tile .k { color: var(--text-2); font-size: 12px; }
+  .tile .v { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .tile .n { color: var(--muted); font-size: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-top: 14px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  .grid2 .card { margin-top: 0; min-width: 0; }
+  .grid2 { margin-top: 14px; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.num, th.num { text-align: right; }
+  .win { color: var(--good); } .loss { color: var(--critical); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; border: 1px solid var(--line); color: var(--text-2); }
+  .pill.open { background: var(--accent-bg); border-color: var(--series); color: var(--text); }
+  .bar { position: relative; height: 10px; min-width: 120px; }
+  .bar span { position: absolute; top: 0; height: 10px; border-radius: 3px; }
+  .bar .mid { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--line); }
+  #chart { width: 100%; height: 260px; position: relative; }
+  #chart svg { width: 100%; height: 100%; display: block; }
+  .tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.12); display: none; white-space: nowrap; }
+  .empty { color: var(--muted); padding: 24px 0; text-align: center; }
+  details summary { cursor: pointer; color: var(--text-2); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>ORB Paper Trades</h1>
+      <div class="sub">NY open breakout–retest · Bybit 1m · results in R, after fees</div>
+    </div>
+    <div style="text-align:right">
+      <div class="sub" id="status">Loading…</div>
+      <div class="err" id="errors"></div>
+    </div>
+  </header>
+
+  <div class="filters">
+    <select id="fSym" aria-label="Asset"><option value="">All assets</option></select>
+    <select id="fDays" aria-label="Period">
+      <option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option>
+      <option value="90">Last 90 days</option><option value="3650">All time</option>
+    </select>
+    <select id="fSide" aria-label="Side"><option value="">Longs + shorts</option><option value="1">Longs</option><option value="-1">Shorts</option></select>
+  </div>
+
+  <section class="tiles" id="tiles"></section>
+
+  <section class="card">
+    <h2>Equity curve <span class="sub" style="text-transform:none;letter-spacing:0">· cumulative net R, closed trades</span></h2>
+    <div id="chart"><div class="tip" id="tip"></div></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>By asset</h2>
+      <div class="scroll"><table id="assets"></table></div>
+    </section>
+    <section class="card">
+      <h2>Today</h2>
+      <div class="scroll"><table id="today"></table></div>
+      <h2 style="margin-top:18px">How trades ended</h2>
+      <div class="scroll"><table id="reasons"></table></div>
+      <h2 style="margin-top:18px">Days</h2>
+      <div class="scroll"><table id="daystat"></table></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Trade log</h2>
+    <div class="scroll"><table id="log"></table></div>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>Backfill history</summary>
+      <div class="note">Replays past sessions for every asset so you can see results straight away. Needs the ADMIN_KEY you set when deploying. Weekends are skipped automatically.</div>
+      <div class="row">
+        <input id="bKey" type="password" placeholder="Admin key" autocomplete="off">
+        <select id="bDays"><option>5</option><option selected>20</option><option>40</option><option>60</option></select>
+        <span class="sub">trading days</span>
+        <button class="primary" id="bGo">Run backfill</button>
+      </div>
+      <div class="note" id="bOut"></div>
+    </details>
+  </section>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let DATA = null;
+const nyT = t => new Date(t).toLocaleString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const locT = t => new Date(t).toLocaleString(undefined, { hour: '2-digit', minute: '2-digit' });
+const r2 = x => (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(2) + 'R';
+const px = x => x == null ? '—' : (+x).toPrecision(6).replace(/\.?0+$/, '');
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+async function load() {
+  try {
+    const r = await fetch('/api/data?days=' + $('fDays').value);
+    DATA = await r.json();
+    const sel = $('fSym'), cur = sel.value;
+    sel.innerHTML = '<option value="">All assets</option>' + DATA.symbols.map(s => `<option${s === cur ? ' selected' : ''}>${s}</option>`).join('');
+    const lr = DATA.meta.lastRun;
+    $('status').textContent = `${DATA.symbols.length} assets · ` + (lr ? `last update ${locT(lr.t)} (${nyT(lr.t)} NY)` : 'waiting for first market session');
+    $('errors').textContent = lr && lr.errors.length ? 'Data errors: ' + lr.errors.join('; ') : '';
+    render();
+  } catch (e) { $('status').textContent = 'Could not load data: ' + e.message; }
+}
+
+function render() {
+  const sym = $('fSym').value, side = $('fSide').value;
+  const trades = DATA.trades.filter(t => (!sym || t.symbol === sym) && (!side || t.dir == side));
+  const closed = trades.filter(t => t.status === 'closed');
+  const live = trades.filter(t => t.status !== 'closed');
+  const wins = closed.filter(t => t.r_net > 0), losses = closed.filter(t => t.r_net <= 0);
+  const net = closed.reduce((a, t) => a + t.r_net, 0);
+  const gw = wins.reduce((a, t) => a + t.r_net, 0), gl = -losses.reduce((a, t) => a + t.r_net, 0);
+  let eq = 0, peak = 0, dd = 0; const curve = [];
+  for (const t of closed) { eq += t.r_net; peak = Math.max(peak, eq); dd = Math.min(dd, eq - peak); curve.push({ y: eq, t }); }
+
+  const tile = (k, v, n, cls = '') => `<div class="tile"><div class="k">${k}</div><div class="v ${cls}">${v}</div><div class="n">${n}</div></div>`;
+  $('tiles').innerHTML =
+    tile('Closed trades', closed.length, `${live.length} open / pending`) +
+    tile('Win rate', closed.length ? Math.round(wins.length / closed.length * 100) + '%' : '—', `${wins.length} won · ${losses.length} lost`) +
+    tile('Net result', closed.length ? r2(net) : '—', 'after fees', closed.length ? (net > 0 ? 'win' : 'loss') : '') +
+    tile('Average per trade', closed.length ? r2(net / closed.length) : '—', 'expectancy') +
+    tile('Profit factor', gl > 0 ? (gw / gl).toFixed(2) : (gw > 0 ? '∞' : '—'), 'won R ÷ lost R') +
+    tile('Max drawdown', closed.length ? r2(dd) : '—', 'worst peak-to-trough');
+
+  drawCurve(curve);
+
+  // by asset
+  const by = {};
+  for (const s of DATA.symbols) by[s] = { n: 0, w: 0, r: 0 };
+  for (const t of closed) { const b = by[t.symbol] ||= { n: 0, w: 0, r: 0 }; b.n++; b.r += t.r_net; if (t.r_net > 0) b.w++; }
+  const rows = Object.entries(by).filter(([s]) => !sym || s === sym).sort((a, b) => b[1].r - a[1].r);
+  const maxAbs = Math.max(0.01, ...rows.map(([, b]) => Math.abs(b.r)));
+  $('assets').innerHTML = '<tr><th>Asset</th><th class="num">Trades</th><th class="num">Win</th><th class="num">Net</th><th></th></tr>' +
+    rows.map(([s, b]) => {
+      const w = Math.abs(b.r) / maxAbs * 50;
+      const bar = `<div class="bar" title="${r2(b.r)}"><div class="mid"></div><span style="${b.r >= 0 ? `left:50%;background:var(--pos)` : `right:50%;background:var(--neg)`};width:${w}%"></span></div>`;
+      return `<tr><td>${s}</td><td class="num">${b.n}</td><td class="num">${b.n ? Math.round(b.w / b.n * 100) + '%' : '—'}</td><td class="num ${b.r > 0 ? 'win' : b.r < 0 ? 'loss' : ''}">${b.n ? r2(b.r) : '—'}</td><td>${b.n ? bar : ''}</td></tr>`;
+    }).join('');
+
+  // today
+  const lastDate = DATA.days.length ? DATA.days[DATA.days.length - 1].date : null;
+  const todays = DATA.days.filter(d => d.date === lastDate && (!sym || d.symbol === sym));
+  $('today').innerHTML = todays.length
+    ? `<tr><th>${lastDate}</th><th class="num">ORB high</th><th class="num">ORB low</th><th class="num">Range</th><th>Status</th></tr>` +
+      todays.map(d => `<tr><td>${d.symbol}</td><td class="num">${px(d.orb_h)}</td><td class="num">${px(d.orb_l)}</td><td class="num">${d.range_pct == null ? '—' : d.range_pct.toFixed(2) + '%'}</td><td>${esc(d.status)}</td></tr>`).join('')
+    : '<tr><td class="empty">No session yet</td></tr>';
+
+  // exit reasons
+  const rc = {};
+  for (const t of closed) rc[t.reason] = (rc[t.reason] || 0) + 1;
+  const names = { 'TP1+TP2': 'Both targets', 'TP1+BE': 'TP1, runner at breakeven', 'SL+SL': 'Stopped out', 'TP1+SL': 'TP1, then stop', 'TP': 'Target', 'SL': 'Stopped out', 'Time+Time': 'Time exit (12:00 NY)', 'TP1+Time': 'TP1, then time exit' };
+  $('reasons').innerHTML = closed.length
+    ? '<tr><th>Outcome</th><th class="num">Trades</th><th class="num">Share</th></tr>' + Object.entries(rc).sort((a, b) => b[1] - a[1])
+        .map(([k, n]) => `<tr><td>${esc(names[k] || k)}</td><td class="num">${n}</td><td class="num">${Math.round(n / closed.length * 100)}%</td></tr>`).join('')
+    : '<tr><td class="empty">No closed trades yet</td></tr>';
+
+  // day stats
+  const ds = {}; let filtered = 0;
+  for (const d of DATA.days.filter(d => !sym || d.symbol === sym)) {
+    const k = d.status.startsWith('skipped') ? d.status.replace('skipped: ', 'Skipped – ') : d.status === 'traded' ? 'Traded' : d.status === 'no setup' ? 'No valid setup' : 'In progress';
+    ds[k] = (ds[k] || 0) + 1;
+    try { filtered += JSON.parse(d.filtered || '[]').length; } catch {}
+  }
+  $('daystat').innerHTML = Object.keys(ds).length
+    ? '<tr><th>Asset-days</th><th class="num">Count</th></tr>' + Object.entries(ds).map(([k, n]) => `<tr><td>${esc(k)}</td><td class="num">${n}</td></tr>`).join('') +
+      `<tr><td>Signals blocked by VWAP / PDH-PDL</td><td class="num">${filtered}</td></tr>`
+    : '<tr><td class="empty">No sessions yet</td></tr>';
+
+  // trade log
+  const log = [...trades].reverse();
+  $('log').innerHTML = log.length
+    ? '<tr><th>Date</th><th>Asset</th><th>Side</th><th>Signal</th><th class="num">Entry</th><th class="num">SL</th><th class="num">TP</th><th class="num">Exit</th><th>Outcome</th><th class="num">Result</th></tr>' +
+      log.map(t => {
+        const res = t.status === 'closed'
+          ? `<span class="${t.r_net > 0 ? 'win' : 'loss'}">${t.r_net > 0 ? '✓' : '✗'} ${r2(t.r_net)}</span>`
+          : `<span class="pill open">${t.status === 'signal' ? 'Entering' : 'Open'}</span>`;
+        return `<tr><td>${t.date}</td><td>${t.symbol}</td><td>${t.dir === 1 ? '▲ Long' : '▼ Short'}</td>
+          <td title="${locT(t.signal_t)} your time">${nyT(t.signal_t)} NY</td><td class="num">${px(t.fill ?? t.entry)}</td><td class="num">${px(t.sl)}</td>
+          <td class="num">${px(t.tp)}</td><td class="num">${px(t.exit_px)}</td><td>${esc(names[t.reason] || t.reason || '')}</td><td class="num">${res}</td></tr>`;
+      }).join('')
+    : '<tr><td class="empty">No trades in this period yet</td></tr>';
+}
+
+function drawCurve(pts) {
+  const box = $('chart'), tip = $('tip');
+  box.querySelector('svg')?.remove();
+  if (!pts.length) { tip.style.display = 'none'; if (!box.querySelector('.empty')) box.insertAdjacentHTML('afterbegin', '<div class="empty">No closed trades yet</div>'); return; }
+  box.querySelector('.empty')?.remove();
+  const W = box.clientWidth, H = box.clientHeight, L = 48, R = 12, T = 10, B = 24;
+  const ys = [0, ...pts.map(p => p.y)], lo = Math.min(...ys), hi = Math.max(...ys), pad = (hi - lo || 1) * 0.1;
+  const y0 = lo - pad, y1 = hi + pad;
+  const X = i => L + (pts.length === 1 ? (W - L - R) / 2 : i * (W - L - R) / (pts.length - 1));
+  const Y = v => T + (y1 - v) / (y1 - y0) * (H - T - B);
+  const step = niceStep((y1 - y0) / 4);
+  let grid = '';
+  for (let v = Math.ceil(y0 / step) * step; v <= y1; v += step)
+    grid += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(${Math.abs(v) < 1e-9 ? '--muted' : '--grid'})"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${+v.toFixed(2)}R</text>`;
+  const d = pts.map((p, i) => `${i ? 'L' : 'M'}${X(i)},${Y(p.y)}`).join('');
+  box.insertAdjacentHTML('afterbegin', `<svg role="img" aria-label="Cumulative net R over ${pts.length} closed trades, ending at ${pts.at(-1).y.toFixed(2)}R">
+    ${grid}<path d="${d}" fill="none" stroke="var(--series)" stroke-width="2" stroke-linejoin="round"/>
+    <line id="xh" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-dasharray="3 3" visibility="hidden"/>
+    <circle id="dot" r="4" fill="var(--series)" stroke="var(--surface)" stroke-width="2" visibility="hidden"/>
+    <text x="${L}" y="${H - 6}" font-size="11" fill="var(--muted)">trade 1</text><text x="${W - R}" y="${H - 6}" font-size="11" fill="var(--muted)" text-anchor="end">trade ${pts.length}</text>
+    <rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" id="hit"/></svg>`);
+  const svg = box.querySelector('svg'), xh = svg.querySelector('#xh'), dot = svg.querySelector('#dot');
+  svg.querySelector('#hit').addEventListener('pointermove', e => {
+    const rect = svg.getBoundingClientRect(), x = e.clientX - rect.left;
+    const i = Math.max(0, Math.min(pts.length - 1, Math.round((x - L) / ((W - L - R) / Math.max(1, pts.length - 1)))));
+    const p = pts[i];
+    xh.setAttribute('x1', X(i)); xh.setAttribute('x2', X(i)); xh.setAttribute('visibility', 'visible');
+    dot.setAttribute('cx', X(i)); dot.setAttribute('cy', Y(p.y)); dot.setAttribute('visibility', 'visible');
+    tip.innerHTML = `<b>${r2(p.y)}</b> total<br>#${i + 1} ${p.t.symbol} ${p.t.dir === 1 ? 'long' : 'short'} · ${p.t.date}<br>this trade ${r2(p.t.r_net)}`;
+    tip.style.display = 'block';
+    tip.style.left = Math.min(X(i) + 10, W - tip.offsetWidth - 4) + 'px'; tip.style.top = Math.max(0, Y(p.y) - 60) + 'px';
+  });
+  svg.querySelector('#hit').addEventListener('pointerleave', () => { tip.style.display = 'none'; xh.setAttribute('visibility', 'hidden'); dot.setAttribute('visibility', 'hidden'); });
+}
+function niceStep(x) { const p = 10 ** Math.floor(Math.log10(x || 1)), f = x / p; return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * p; }
+
+// backfill: one symbol + one date per request (keeps each run tiny on the free plan)
+$('bGo').onclick = async () => {
+  const key = $('bKey').value, n = +$('bDays').value, out = $('bOut');
+  if (!key) { out.textContent = 'Enter the admin key first.'; return; }
+  const dates = []; const d = new Date();
+  d.setUTCDate(d.getUTCDate() - 1);
+  while (dates.length < n) { const w = d.getUTCDay(); if (w !== 0 && w !== 6) dates.push(d.toISOString().slice(0, 10)); d.setUTCDate(d.getUTCDate() - 1); }
+  const jobs = dates.flatMap(dt => DATA.symbols.map(s => [s, dt]));
+  let done = 0, errs = 0, last = '';
+  $('bGo').disabled = true;
+  for (const [s, dt] of jobs) {
+    try {
+      const r = await fetch(`/api/backfill?symbol=${s}&date=${dt}&key=${encodeURIComponent(key)}`);
+      const j = await r.json();
+      if (!r.ok) { errs++; last = j.error; if (r.status === 401) break; }
+    } catch (e) { errs++; last = e.message; }
+    done++; out.textContent = `${done} / ${jobs.length} done${errs ? ` · ${errs} errors (last: ${last})` : ''}`;
+  }
+  $('bGo').disabled = false;
+  out.textContent += ' · finished';
+  $('fDays').value = '90'; load();
+};
+
+$('fSym').onchange = render; $('fSide').onchange = render; $('fDays').onchange = load;
+window.addEventListener('resize', () => DATA && render());
+load(); setInterval(load, 60000);
+</script>
+</body>
+</html>

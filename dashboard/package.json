@@ -1,0 +1,12 @@
+{
+  "name": "orb-dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test/strategy.test.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3.114.17"
+  }
+}

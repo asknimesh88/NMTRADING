@@ -1,0 +1,24 @@
+name = "orb-dashboard"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+
+[triggers]
+# every minute, Mon-Fri, 13:00-17:59 UTC (covers 09:45-12:30 New York in summer and winter)
+crons = ["* 13-17 * * 1-5"]
+
+[vars]
+# Up to 15 Bybit USDT perpetual symbols, comma separated
+SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT"
+# Coins updated per cron run. Free plan: keep 3. Workers Paid: set to 15.
+SYMBOLS_PER_RUN = "3"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "orb-dashboard"
+database_id = "PASTE-YOUR-DATABASE-ID-HERE"
+
+# lets src/index.js import dashboard.html as text
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true
