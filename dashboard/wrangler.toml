@@ -15,7 +15,7 @@ SYMBOLS_PER_RUN = "3"
 [[d1_databases]]
 binding = "DB"
 database_name = "orb-dashboard"
-database_id = "PASTE-YOUR-DATABASE-ID-HERE"
+database_id = "31cb0a86-a335-4ce8-b3b7-44cc037ccb5f"
 
 # lets src/index.js import dashboard.html as text
 [[rules]]
