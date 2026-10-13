@@ -8,7 +8,7 @@ crons = ["* 13-17 * * 1-5"]
 
 [vars]
 # Up to 15 Bybit USDT perpetual symbols, comma separated
-SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT"
+SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,QNTUSDT,HBARUSDT,ALGOUSDT,XLMUSDT,XDCUSDT,LINKUSDT,HYPEUSDT,NEARUSDT,SUIUSDT,TAOUSDT"
 # Coins updated per cron run. Free plan: keep 3. Workers Paid: set to 15.
 SYMBOLS_PER_RUN = "3"
 
